@@ -1,0 +1,126 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKDAYS
+  WEEKLY
+  MONTHLY
+  CUSTOM_INTERVAL
+}
+
+enum ActivityEventType {
+  TASK_CREATED
+  TASK_COMPLETED
+  TASK_UNCOMPLETED
+  TASK_DELETED
+  TASK_UPDATED
+  CATEGORY_CREATED
+  CATEGORY_DELETED
+  CATEGORY_UPDATED
+}
+
+model Admin {
+  id                String   @id @default(cuid())
+  passphraseHash    String
+  timezone          String   @default("UTC")
+  weekStartsOn      Int      @default(1)
+  overloadThreshold Int      @default(9)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  color       String
+  icon        String
+  description String?
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tasks       Task[]
+
+  @@index([isArchived])
+}
+
+model Task {
+  id                       String           @id @default(cuid())
+  title                    String
+  description              String?
+  categoryId               String
+  category                 Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  priority                 Priority?
+  estimatedDurationMinutes Int?
+  actualDurationMinutes    Int?
+  dueDate                  DateTime?
+  completedAt              DateTime?
+  notes                    String?
+  isRecurringTemplate      Boolean          @default(false)
+  recurrenceRuleId         String?
+  recurrenceRule           RecurrenceRule?  @relation("GeneratedOccurrences", fields: [recurrenceRuleId], references: [id], onDelete: SetNull)
+  ownedRecurrenceRule      RecurrenceRule?  @relation("TemplateOwner")
+  isBackfilled             Boolean          @default(false)
+  tags                     TaskTag[]
+  createdAt                DateTime         @default(now())
+  updatedAt                DateTime         @updatedAt
+
+  @@index([categoryId])
+  @@index([dueDate])
+  @@index([completedAt])
+  @@index([createdAt])
+}
+
+model RecurrenceRule {
+  id             String              @id @default(cuid())
+  templateTaskId String              @unique
+  templateTask   Task                @relation("TemplateOwner", fields: [templateTaskId], references: [id], onDelete: Cascade)
+  frequency      RecurrenceFrequency
+  daysOfWeek     Int[]               @default([])
+  dayOfMonth     Int?
+  intervalDays   Int?
+  isActive       Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  occurrences    Task[]              @relation("GeneratedOccurrences")
+}
+
+model Tag {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  tasks     TaskTag[]
+}
+
+model TaskTag {
+  taskId String
+  tagId  String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, tagId])
+}
+
+model ActivityLogEntry {
+  id             String            @id @default(cuid())
+  eventType      ActivityEventType
+  entityId       String
+  entitySnapshot Json
+  createdAt      DateTime          @default(now())
+
+  @@index([createdAt])
+  @@index([eventType])
+}
