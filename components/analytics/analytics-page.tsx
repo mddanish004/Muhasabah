@@ -41,6 +41,7 @@ interface DailyBucket {
   date: string;
   assigned: number;
   completed: number;
+  incomplete: number;
   completionRate: number;
 }
 
@@ -56,13 +57,14 @@ interface CompletionRatesData {
 
 interface AssignedVsCompletedData {
   granularity: "daily" | "weekly" | "monthly";
-  series: Array<{ date: string; assigned: number; completed: number }>;
+  series: Array<{ date: string; assigned: number; completed: number; incomplete: number }>;
   categories: Array<{
     categoryId: string;
     categoryName: string;
     color?: string;
     assigned: number;
     completed: number;
+    incomplete: number;
     completionRate: number;
   }>;
   radar: Array<{ categoryName: string; completionRate: number }>;
@@ -209,6 +211,26 @@ interface PriorityDurationData {
   efficiencyScore: number | null;
   peakHours: Array<{ hour: number; count: number }> | null;
   usage: { priorityTasks: number; durationTasks: number };
+}
+
+interface MissedTaskItem {
+  id: string;
+  title: string;
+  categoryId: string;
+  categoryName: string;
+  color: string;
+  priority: string | null;
+  dueDate: string | null;
+  assignedDate: string;
+  daysOverdue: number;
+}
+
+interface MissedTasksData {
+  series: Array<{ date: string; assigned: number; completed: number; incomplete: number }>;
+  missed: MissedTaskItem[];
+  totals: { assigned: number; completed: number; incomplete: number; missed: number; missedRate: number };
+  missedToday: number;
+  overdueNow: number;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -698,6 +720,7 @@ function AssignedVsCompletedSection({ range, categories }: SectionProps) {
           <Legend wrapperStyle={{ fontSize: 12 }} />
           <Bar dataKey="assigned" name="Assigned" fill="var(--info)" radius={[3, 3, 0, 0]} />
           <Bar dataKey="completed" name="Completed" fill="var(--accent)" radius={[3, 3, 0, 0]} />
+          <Bar dataKey="incomplete" name="Incomplete" fill="var(--warning)" radius={[3, 3, 0, 0]} />
         </ComposedChart>
       </ChartWrap>
 
@@ -735,6 +758,99 @@ function AssignedVsCompletedSection({ range, categories }: SectionProps) {
       ) : (
         <EmptyState title="No radar data" description="No categories with completions in this range." />
       )}
+    </div>
+  );
+}
+
+// ─── Section 15.2b: Incomplete & Missed Tasks ─────────────────────────────────
+
+function MissedTasksSection({ range, categories }: SectionProps) {
+  const { data, isLoading } = useAnalyticsSection("missed-tasks", { range, categories });
+  const d = data as MissedTasksData | undefined;
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          {[...Array(4)].map((_, i) => <SkeletonBlock key={i} height="h-24" />)}
+        </div>
+        <SkeletonBlock height="h-[280px]" />
+        <SkeletonBlock height="h-72" />
+      </div>
+    );
+  }
+
+  if (!d) {
+    return <EmptyState title="No data" description="No task data for this range." />;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatTile label="Missed Today" value={d.missedToday} sub="due today, still incomplete" />
+        <StatTile label="Overdue Now" value={d.overdueNow} sub="missed on past days, still open" />
+        <StatTile label="Missed in Range" value={d.totals.missed} sub="missed on days inside this range" />
+        <StatTile label="Missed Rate" value={fmt(d.totals.missedRate, "%")} sub="incomplete ÷ assigned in range" />
+      </div>
+
+      <ChartWrap title="Assigned, Completed & Incomplete by Day">
+        <ComposedChart data={d.series} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
+          <CartesianGrid stroke="var(--border-subtle)" vertical={false} />
+          <XAxis dataKey="date" stroke="var(--text-tertiary)" tick={{ fontSize: 11 }} tickFormatter={tickLabel} />
+          <YAxis stroke="var(--text-tertiary)" tick={{ fontSize: 12 }} allowDecimals={false} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          <Bar dataKey="assigned" name="Assigned" fill="var(--info)" radius={[3, 3, 0, 0]} />
+          <Bar dataKey="completed" name="Completed" fill="var(--accent)" radius={[3, 3, 0, 0]} />
+          <Bar dataKey="incomplete" name="Incomplete" fill="var(--warning)" radius={[3, 3, 0, 0]} />
+        </ComposedChart>
+        <p className="mt-1 text-xs italic text-[var(--text-tertiary)]">
+          Incomplete = tasks assigned to that day that are still open today. For past days this equals missed.
+        </p>
+      </ChartWrap>
+
+      <div>
+        <p className="mb-3 text-sm font-medium text-[var(--text-secondary)]">Missed &amp; Incomplete Tasks</p>
+        {d.missed.length === 0 ? (
+          <EmptyState title="Nothing missed" description="All tasks are either completed or not yet due." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border-subtle)] text-xs uppercase tracking-[0.06em] text-[var(--text-secondary)]">
+                  <th className="pb-3 text-left font-medium">Task</th>
+                  <th className="pb-3 text-left font-medium">Category</th>
+                  <th className="pb-3 text-right font-medium">Due</th>
+                  <th className="pb-3 text-right font-medium">Overdue</th>
+                  <th className="pb-3 text-right font-medium">Priority</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border-subtle)]">
+                {d.missed.map((task) => (
+                  <tr key={task.id} className="group">
+                    <td className="py-3 text-[var(--text-primary)]">{task.title}</td>
+                    <td className="py-3">
+                      <span className="flex items-center gap-2 text-[var(--text-secondary)]">
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ background: task.color }} />
+                        {task.categoryName}
+                      </span>
+                    </td>
+                    <td className="py-3 text-right text-[var(--text-secondary)]">
+                      {task.dueDate ?? "—"}
+                    </td>
+                    <td className={cn("py-3 text-right font-medium", task.daysOverdue > 0 ? "text-[var(--danger)]" : "text-[var(--warning)]")}>
+                      {task.daysOverdue === 0 ? "today" : `${task.daysOverdue}d`}
+                    </td>
+                    <td className={cn("py-3 text-right capitalize", PRIORITY_COLOR[task.priority?.toUpperCase() ?? ""] ?? "text-[var(--text-secondary)]")}>
+                      {task.priority ?? "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1787,6 +1903,10 @@ export function AnalyticsPage() {
 
       <SectionShell id="assigned-vs-completed" title="Assigned vs. Completed" collapsedMap={collapsedMap} onToggle={toggle}>
         <AssignedVsCompletedSection range={range} categories={selected} />
+      </SectionShell>
+
+      <SectionShell id="missed-tasks" title="Incomplete & Missed Tasks" collapsedMap={collapsedMap} onToggle={toggle}>
+        <MissedTasksSection range={range} categories={selected} />
       </SectionShell>
 
       <SectionShell id="trends" title="Trends" collapsedMap={collapsedMap} onToggle={toggle}>

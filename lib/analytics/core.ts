@@ -11,15 +11,16 @@ type DailyBucket = {
   date: string;
   assigned: number;
   completed: number;
+  incomplete: number;
   completionRate: number;
-  categories: Record<string, { assigned: number; completed: number }>;
+  categories: Record<string, { assigned: number; completed: number; incomplete: number }>;
 };
 
-type Cohort = { assigned: number; completed: number };
+type Cohort = { assigned: number; completed: number; incomplete: number };
 
 type BuildResult = {
   daily: DailyBucket[];
-  byCategory: Map<string, { assigned: number; completed: number }>;
+  byCategory: Map<string, { assigned: number; completed: number; incomplete: number }>;
   cohort: Cohort;
   completedPerDay: number[];
   createdDates: string[];
@@ -46,16 +47,16 @@ function buildBuckets(tasks: TaskWithRelations[], categories: Category[], from: 
   const normalized = normalizeTasks(tasks, timezone);
   const dateKeys = enumerateDateKeys(from, to, timezone);
   const dailyMap = new Map<string, DailyBucket>();
-  const byCategory = new Map<string, { assigned: number; completed: number }>();
-  const cohort: Cohort = { assigned: 0, completed: 0 };
+  const byCategory = new Map<string, { assigned: number; completed: number; incomplete: number }>();
+  const cohort: Cohort = { assigned: 0, completed: 0, incomplete: 0 };
   const createdDates: string[] = [];
 
   for (const category of categories) {
-    byCategory.set(category.id, { assigned: 0, completed: 0 });
+    byCategory.set(category.id, { assigned: 0, completed: 0, incomplete: 0 });
   }
 
   for (const key of dateKeys) {
-    dailyMap.set(key, { date: key, assigned: 0, completed: 0, completionRate: 0, categories: {} });
+    dailyMap.set(key, { date: key, assigned: 0, completed: 0, incomplete: 0, completionRate: 0, categories: {} });
   }
 
   for (const task of normalized) {
@@ -64,7 +65,7 @@ function buildBuckets(tasks: TaskWithRelations[], categories: Category[], from: 
 
     cohort.assigned += 1;
     day.assigned += 1;
-    day.categories[task.categoryId] ??= { assigned: 0, completed: 0 };
+    day.categories[task.categoryId] ??= { assigned: 0, completed: 0, incomplete: 0 };
     day.categories[task.categoryId].assigned += 1;
 
     const categoryStats = byCategory.get(task.categoryId);
@@ -73,12 +74,16 @@ function buildBuckets(tasks: TaskWithRelations[], categories: Category[], from: 
     if (task.completedAt) {
       cohort.completed += 1;
       if (categoryStats) categoryStats.completed += 1;
+    } else {
+      cohort.incomplete += 1;
+      day.incomplete += 1;
+      if (categoryStats) categoryStats.incomplete += 1;
     }
 
     if (task.completedDate && dailyMap.has(task.completedDate)) {
       const completedDay = dailyMap.get(task.completedDate)!;
       completedDay.completed += 1;
-      completedDay.categories[task.categoryId] ??= { assigned: 0, completed: 0 };
+      completedDay.categories[task.categoryId] ??= { assigned: 0, completed: 0, incomplete: 0 };
       completedDay.categories[task.categoryId].completed += 1;
     }
 
@@ -316,15 +321,16 @@ export function buildCompletionRates(
 
 function aggregateSeries(daily: DailyBucket[], granularity: "daily" | "weekly" | "monthly", weekStartsOn: number) {
   if (granularity === "daily") {
-    return daily.map((day) => ({ date: day.date, assigned: day.assigned, completed: day.completed }));
+    return daily.map((day) => ({ date: day.date, assigned: day.assigned, completed: day.completed, incomplete: day.incomplete }));
   }
 
-  const buckets = new Map<string, { date: string; assigned: number; completed: number }>();
+  const buckets = new Map<string, { date: string; assigned: number; completed: number; incomplete: number }>();
   for (const day of daily) {
     const key = granularity === "weekly" ? weekStartKey(day.date, weekStartsOn) : day.date.slice(0, 7);
-    const existing = buckets.get(key) ?? { date: key, assigned: 0, completed: 0 };
+    const existing = buckets.get(key) ?? { date: key, assigned: 0, completed: 0, incomplete: 0 };
     existing.assigned += day.assigned;
     existing.completed += day.completed;
+    existing.incomplete += day.incomplete;
     buckets.set(key, existing);
   }
   return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
@@ -343,13 +349,14 @@ export function buildAssignedVsCompleted(
   const granularity: "daily" | "weekly" | "monthly" = days <= 31 ? "daily" : days <= 180 ? "weekly" : "monthly";
 
   const categoryComparison = categories.map((category) => {
-    const stats = built.byCategory.get(category.id) ?? { assigned: 0, completed: 0 };
+    const stats = built.byCategory.get(category.id) ?? { assigned: 0, completed: 0, incomplete: 0 };
     return {
       categoryId: category.id,
       categoryName: category.name,
       color: category.color,
       assigned: stats.assigned,
       completed: stats.completed,
+      incomplete: stats.incomplete,
       completionRate: stats.assigned === 0 ? 0 : round((stats.completed / stats.assigned) * 100, 2),
     };
   });
@@ -1064,6 +1071,74 @@ export function buildPriorityDuration(tasks: TaskWithRelations[], categories: Ca
   };
 }
 
+// ─── Section 15.11: Incomplete & Missed Tasks ─────────────────────────────────
+
+export type MissedTaskItem = {
+  id: string;
+  title: string;
+  categoryId: string;
+  categoryName: string;
+  color: string;
+  priority: Priority | null;
+  dueDate: string | null;
+  assignedDate: string;
+  daysOverdue: number;
+};
+
+export function buildMissedTasks(
+  tasks: TaskWithRelations[],
+  categories: Category[],
+  from: Date,
+  to: Date,
+  timezone: string,
+) {
+  const built = buildBuckets(tasks, categories, from, to, timezone);
+  const today = todayKey(timezone);
+  const now = new Date();
+
+  // Every incomplete task whose assigned day is today or earlier counts as missed.
+  // Today's entries are "incomplete"; past entries are "missed".
+  const missed: MissedTaskItem[] = tasks
+    .filter((task) => !task.completedAt)
+    .map((task) => ({ task, assignedDate: bucketDate(task.dueDate, task.createdAt, timezone) }))
+    .filter(({ assignedDate }) => assignedDate <= today)
+    .sort((a, b) => b.assignedDate.localeCompare(a.assignedDate) || a.task.title.localeCompare(b.task.title))
+    .map(({ task, assignedDate }) => ({
+      id: task.id,
+      title: task.title,
+      categoryId: task.categoryId,
+      categoryName: task.category.name,
+      color: task.category.color,
+      priority: task.priority,
+      dueDate: task.dueDate ? getDateKey(task.dueDate, timezone) : null,
+      assignedDate,
+      daysOverdue: compareDateKeys(today, assignedDate),
+    }));
+
+  const fromKey = getDateKey(from, timezone);
+  const missedInRange = missed.filter((item) => item.assignedDate >= fromKey);
+
+  return {
+    series: built.daily.map((day) => ({
+      date: day.date,
+      assigned: day.assigned,
+      completed: day.completed,
+      incomplete: day.incomplete,
+    })),
+    missed,
+    totals: {
+      assigned: built.cohort.assigned,
+      completed: built.cohort.completed,
+      incomplete: built.cohort.incomplete,
+      missed: missedInRange.length,
+      missedRate: built.cohort.assigned === 0 ? 0 : round((built.cohort.incomplete / built.cohort.assigned) * 100, 2),
+    },
+    missedToday: missed.filter((item) => item.daysOverdue === 0).length,
+    overdueNow: missed.filter((item) => item.daysOverdue > 0).length,
+    generatedAt: now.toISOString(),
+  };
+}
+
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 
 export function buildDashboardData(tasks: TaskWithRelations[], categories: Category[], timezone: string) {
@@ -1080,11 +1155,13 @@ export function buildDashboardData(tasks: TaskWithRelations[], categories: Categ
     date: today,
     assigned: 0,
     completed: 0,
+    incomplete: 0,
     completionRate: 0,
     categories: {},
   };
   const streaks = buildStreaks(tasks, categories, oneYearAgo, now, timezone);
   const categorySummary = buildAssignedVsCompleted(tasks, categories, thirtyDaysAgo, now, timezone).categories;
+  const missed = buildMissedTasks(tasks, categories, oneYearAgo, now, timezone);
 
   return {
     kpis: {
@@ -1092,6 +1169,7 @@ export function buildDashboardData(tasks: TaskWithRelations[], categories: Categ
       tasksDueToday: todayBucket.assigned,
       tasksCompletedToday: todayBucket.completed,
       tasksRemainingToday: Math.max(0, todayBucket.assigned - todayBucket.completed),
+      missedTasks: missed.missed.length,
       currentStreak: streaks.currentStreak,
       longestStreak: streaks.longestStreak.length,
       longestStreakEnd: streaks.longestStreak.endDate,
@@ -1099,6 +1177,7 @@ export function buildDashboardData(tasks: TaskWithRelations[], categories: Categ
     heatmap: trailingYear.daily,
     trend: trailingMonth.daily,
     categorySummary: categorySummary.slice(0, 8),
+    missedTasks: missed.missed.slice(0, 20),
   };
 }
 

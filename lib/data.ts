@@ -11,6 +11,7 @@ import {
   buildCurrentPeriodTiles,
   buildDashboardData,
   buildDistribution,
+  buildMissedTasks,
   buildPriorityDuration,
   buildRecentActivity,
   buildScores,
@@ -383,6 +384,8 @@ export async function fetchAnalytics(section: string, range: string, categoryIds
       return buildTimeComparisons(tasks, categories, from, to, admin.timezone, admin.weekStartsOn);
     case "distribution":
       return buildDistribution(tasks, categories, from, to, admin.timezone, admin.weekStartsOn);
+    case "missed-tasks":
+      return buildMissedTasks(tasks, categories, from, to, admin.timezone);
     case "aging":
       return buildAging(tasks, categories, admin.timezone);
     case "priority-duration":

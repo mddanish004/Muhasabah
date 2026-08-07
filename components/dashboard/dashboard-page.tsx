@@ -3,6 +3,7 @@
 import Link from "next/link";
 import {
   Activity,
+  AlertTriangle,
   CalendarDays,
   CheckCircle2,
   Clock,
@@ -37,6 +38,7 @@ type DashboardData = {
     tasksDueToday: number;
     tasksCompletedToday: number;
     tasksRemainingToday: number;
+    missedTasks: number;
     currentStreak: number;
     longestStreak: number;
   };
@@ -48,6 +50,17 @@ type DashboardData = {
     color: string;
     completionRate: number;
     assigned: number;
+  }>;
+  missedTasks: Array<{
+    id: string;
+    title: string;
+    categoryId: string;
+    categoryName: string;
+    color: string;
+    priority: string | null;
+    dueDate: string | null;
+    assignedDate: string;
+    daysOverdue: number;
   }>;
   recentActivity: Array<{
     id: string;
@@ -215,7 +228,7 @@ export function DashboardPage() {
       </div>
 
       {/* Row 2: Task KPIs */}
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid gap-4 xl:grid-cols-4">
         <KpiCard
           icon={CalendarDays}
           label="Tasks Due Today"
@@ -234,7 +247,64 @@ export function DashboardPage() {
           value={d.kpis.tasksRemainingToday}
           subtitle="still open before end of day"
         />
+        <KpiCard
+          icon={AlertTriangle}
+          label="Missed Tasks"
+          value={d.kpis.missedTasks}
+          subtitle="overdue or due today, still open"
+        />
       </div>
+
+      {/* Missed & incomplete tasks */}
+      <Card>
+        <h2 className="text-lg font-semibold">Missed &amp; Incomplete Tasks</h2>
+        <p className="mt-1 text-sm text-[var(--text-secondary)]">
+          Tasks due today or earlier that are still open — including everything missed in the past.
+        </p>
+        <div className="mt-4 space-y-2">
+          {d.missedTasks.length === 0 ? (
+            <p className="text-sm text-[var(--text-secondary)]">
+              No missed tasks. Everything due today or earlier has been completed.
+            </p>
+          ) : (
+            d.missedTasks.map((task) => (
+              <Link
+                key={task.id}
+                href={`/tasks/${task.id}`}
+                className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border-subtle)] p-3 transition hover:bg-[var(--bg-surface-2)]"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="h-3 w-3 flex-shrink-0 rounded-full"
+                    style={{ backgroundColor: task.color }}
+                  />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm text-[var(--text-primary)]">{task.title}</div>
+                    <div className="mt-0.5 text-xs text-[var(--text-secondary)]">
+                      {task.categoryName}
+                      {task.dueDate ? ` · due ${task.dueDate}` : ""}
+                    </div>
+                  </div>
+                </div>
+                <span
+                  className={cn(
+                    "flex-shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium",
+                    task.daysOverdue > 0
+                      ? "border-[var(--danger)]/30 bg-[var(--danger)]/10 text-[var(--danger)]"
+                      : "border-[var(--warning)]/30 bg-[var(--warning)]/10 text-[var(--warning)]",
+                  )}
+                >
+                  {task.daysOverdue === 0
+                    ? "Incomplete today"
+                    : task.daysOverdue === 1
+                      ? "1 day overdue"
+                      : `${task.daysOverdue} days overdue`}
+                </span>
+              </Link>
+            ))
+          )}
+        </div>
+      </Card>
 
       {/* Trend + Category */}
       <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">

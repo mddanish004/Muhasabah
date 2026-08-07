@@ -5,6 +5,7 @@ import {
   buildCategoryDeepDive,
   buildCompletionRates,
   buildDistribution,
+  buildMissedTasks,
   buildPriorityDuration,
   buildScores,
   buildStreaks,
@@ -299,5 +300,52 @@ describe("analytics core", () => {
     expect(result.peakHours).not.toBeNull();
     expect(result.usage.priorityTasks).toBe(2);
     expect(result.usage.durationTasks).toBe(2);
+  });
+
+  it("counts incomplete and missed tasks per day", () => {
+    const result = buildMissedTasks(
+      tasks,
+      categories,
+      new Date("2026-08-03T00:00:00.000Z"),
+      new Date("2026-08-04T23:59:59.000Z"),
+      "UTC",
+    );
+
+    expect(result.totals.assigned).toBe(2);
+    expect(result.totals.completed).toBe(1);
+    expect(result.totals.incomplete).toBe(1);
+    expect(result.totals.missed).toBe(1);
+    expect(result.totals.missedRate).toBe(50);
+    expect(result.series[0]).toMatchObject({ date: "2026-08-03", incomplete: 0 });
+    expect(result.series[1]).toMatchObject({ date: "2026-08-04", incomplete: 1 });
+    expect(result.missed).toHaveLength(1);
+    expect(result.missed[0].title).toBe("B");
+    expect(result.missed[0].daysOverdue).toBeGreaterThan(0);
+    expect(result.overdueNow).toBe(1);
+    expect(result.missedToday).toBe(0);
+  });
+
+  it("flags tasks due today as missed today", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const dueToday = {
+      ...tasks[1],
+      id: "task-today",
+      dueDate: new Date(`${today}T00:00:00.000Z`),
+      createdAt: new Date(`${today}T00:00:00.000Z`),
+    };
+
+    const result = buildMissedTasks(
+      [dueToday],
+      categories,
+      new Date(`${today}T00:00:00.000Z`),
+      new Date(`${today}T23:59:59.000Z`),
+      "UTC",
+    );
+
+    expect(result.missedToday).toBe(1);
+    expect(result.overdueNow).toBe(0);
+    expect(result.missed).toHaveLength(1);
+    expect(result.missed[0].daysOverdue).toBe(0);
+    expect(result.totals.missed).toBe(1);
   });
 });
